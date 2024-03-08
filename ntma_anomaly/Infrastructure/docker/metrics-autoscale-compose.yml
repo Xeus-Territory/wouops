@@ -1,0 +1,121 @@
+version: '3'
+
+volumes:
+  prometheus_data: {}
+  redis_data: {}
+
+networks:
+  data-metric:
+    external: true
+  monitoring:
+    external: true
+
+services:  
+  nginxlog_exporter:
+    image: quay.io/martinhelmich/prometheus-nginxlog-exporter:v1.10.0
+    container_name: nginxlog-exporter
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 200M
+    command:
+      - '--config-file=/etc/prometheus-nginxlog-exporter.yml'
+    ports:
+      - 4040:4040
+    volumes:
+      - ./log/access.log:/mnt/nginxlogs/access.log
+      - ./conf/nginxlog/nginxlog_exporter.yml:/etc/prometheus-nginxlog-exporter.yml
+  
+  prometheus-kafka-adapter:
+    image: telefonica/prometheus-kafka-adapter:1.8.0
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 200M
+    container_name: prometheus-kafka-adapter
+    environment:
+      KAFKA_BROKERS: ${KAFKA_HOST}:9092
+      KAFKA_TOPIC: prometheus-metrics
+    depends_on:
+      - kafka
+
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 200M
+    restart: unless-stopped
+    healthcheck:
+      test: nc -z localhost 2181 || exit -1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      - redis
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 500M
+    restart: unless-stopped
+    healthcheck:
+      test: nc -z localhost 9092 || exit -1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: ${KAFKA_HOST}
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: prometheus-metrics
+    depends_on:
+      - zookeeper
+
+  redis:
+    image: redis:alpine3.17
+    container_name: redis
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 200M
+        reservations:
+          cpus: '0.25'
+          memory: 100M
+    restart: unless-stopped
+    healthcheck:
+      test: nc -z localhost 6379 || exit -1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  kafka-python:
+    image: markpage2k1/python-kafka:v1.0.0
+    container_name: kafka-python
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 200M
+        reservations:
+          cpus: '0.25'
+          memory: 100M
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTNAME: redis
+      REDIS_PORT: 6379
+      KAFKA_HOSTNAME: ${KAFKA_HOST}
+      KAFKA_PORT: 9092
+      KAFKA_TOPIC: prometheus-metrics
+    depends_on:
+      - kafka
